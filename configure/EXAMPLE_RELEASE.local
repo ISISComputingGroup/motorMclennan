@@ -1,0 +1,4 @@
+MOTOR=
+-include $(MOTOR)/configure/RELEASE
+# path to motorMclennan is needed to build the IOC inside motorMclennan, but outside motor
+MOTOR_MCLENNAN=

@@ -5,6 +5,9 @@ include $(TOP)/configure/CONFIG
 #  ADD MACRO DEFINITIONS AFTER THIS LINE
 #=============================
 
+# The following are used for debugging messages.
+#!USR_CXXFLAGS += -DDEBUG
+
 #=============================
 # Build the IOC application
 
@@ -16,10 +19,21 @@ DBD += mclennan.dbd
 mclennan_DBD += base.dbd
 
 # Include dbd files from all support applications:
-#mclennan_DBD += xxx.dbd
+#ifdef ASYN
+mclennan_DBD += asyn.dbd
+#endif
+mclennan_DBD += motorSupport.dbd
+mclennan_DBD += devMclennan.dbd
 
 # Add all the support libraries needed by this IOC
-#mclennan_LIBS += xxx
+mclennan_LIBS += mclennan
+mclennan_LIBS += motor
+#ifdef ASYN
+mclennan_LIBS += asyn
+#endif
+#ifdef SNCSEQ
+mclennan_LIBS += seq pv
+#endif
 
 # mclennan_registerRecordDeviceDriver.cpp derives from mclennan.dbd
 mclennan_SRCS += mclennan_registerRecordDeviceDriver.cpp
