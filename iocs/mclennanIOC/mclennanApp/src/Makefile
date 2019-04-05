@@ -21,12 +21,13 @@ mclennan_DBD += base.dbd
 # Include dbd files from all support applications:
 #ifdef ASYN
 mclennan_DBD += asyn.dbd
+mclennan_DBD += drvAsynSerialPort.dbd
 #endif
 mclennan_DBD += motorSupport.dbd
-mclennan_DBD += devMclennan.dbd
+mclennan_DBD += devMclennanMotor.dbd
 
 # Add all the support libraries needed by this IOC
-mclennan_LIBS += mclennan
+mclennan_LIBS += Mclennan
 mclennan_LIBS += motor
 #ifdef ASYN
 mclennan_LIBS += asyn
