@@ -93,8 +93,13 @@ int controller_error = 0;
 
 /*----------------functions-----------------*/
 STATIC int recv_mess(int card, char *buff, int len);
+<<<<<<< HEAD:motorApp/MclennanSrc/drvPM304.cc
 STATIC RTN_STATUS send_mess(int, const char *, char *);
 STATIC int send_recv_mess(int card, const char *out, char *in, size_t in_size);
+=======
+STATIC RTN_STATUS send_mess(int, const char *, const char *);
+STATIC int send_recv_mess(int card, const char *out, char *in);
+>>>>>>> origin/vendor:modules/motorMclennan/mclennanApp/src/drvPM304.cc
 STATIC void start_status(int card);
 STATIC int set_status(int card, int signal);
 static long report(int level);
@@ -418,7 +423,7 @@ STATIC int set_status(int card, int signal)
     {
         strcpy(buff, nodeptr->postmsgptr);
         strcat(buff, "\r");
-        send_mess(card, buff, (char*) NULL);
+        send_mess(card, buff, NULL);
         nodeptr->postmsgptr = NULL;
     }
 
@@ -439,7 +444,7 @@ STATIC int set_status(int card, int signal)
 /* ring buffer                                       */
 /* send_mess()                                       */
 /*****************************************************/
-STATIC RTN_STATUS send_mess(int card, const char *com, char *name)
+STATIC RTN_STATUS send_mess(int card, const char *com, const char *name)
 {
     char *p, *tok_save = NULL;
     char response[BUFF_SIZE];
