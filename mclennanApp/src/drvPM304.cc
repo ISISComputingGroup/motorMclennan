@@ -93,7 +93,7 @@ int controller_error = 0;
 
 /*----------------functions-----------------*/
 STATIC int recv_mess(int card, char *buff, int len);
-STATIC RTN_STATUS send_mess(int, const char *, char *);
+STATIC RTN_STATUS send_mess(int, const char *, char const *);
 STATIC int send_recv_mess(int card, const char *out, char *in, size_t in_size);
 STATIC void start_status(int card);
 STATIC int set_status(int card, int signal);
@@ -439,7 +439,7 @@ STATIC int set_status(int card, int signal)
 /* ring buffer                                       */
 /* send_mess()                                       */
 /*****************************************************/
-STATIC RTN_STATUS send_mess(int card, const char *com, char *name)
+STATIC RTN_STATUS send_mess(int card, const char *com, char const *name)
 {
     char *p, *tok_save = NULL;
     char response[BUFF_SIZE];
