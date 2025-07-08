@@ -16,7 +16,7 @@
  *                              motorRecord
  * .03  02-11-03        mlr     Version 3.0, added support for PM600 model.
  *                              Added SD for decceleration.
- * .04  05/27/03 	rls 	R3.14 conversion.
+ * .04  05/27/03    rls     R3.14 conversion.
  *      ...
  */
 
@@ -24,14 +24,20 @@
 #define VERSION 3.00
 
 
-#include 	<string.h>
+#include    <string.h>
 #include        "motorRecord.h"
 #include        "motor.h"
 #include        "motordevCom.h"
 #include        "drvPM304.h"
-#include 	"epicsExport.h"
+#include    "epicsExport.h"
 
 #define STATIC static
+
+#define HOME_MODE_BUILTIN 0
+#define HOME_MODE_CONST_VELOCITY_MOVE 1
+#define HOME_MODE_REVERSE_HOME_AND_ZERO 2
+#define HOME_MODE_CONST_VELOCITY_MOVE_AND_ZERO 3
+#define HOME_MODE_FORWARD_HOME_AND_ZERO 4
 
 extern struct driver_table PM304_access;
 
@@ -43,7 +49,7 @@ extern "C" {epicsExportAddress(int, devPM304Debug);}
 
 static inline void Debug(int level, const char *format, ...) {
   #ifdef DEBUG
-    if (level < devPM304Debug) {
+    if (level <= devPM304Debug) {
       va_list pVar;
       va_start(pVar, format);
       vprintf(format, pVar);
@@ -119,7 +125,7 @@ STATIC long PM304_init(int after)
 
     if (!after)
     {
-	drvtabptr = &PM304_access;
+    drvtabptr = &PM304_access;
         (drvtabptr->init)();
     }
 
@@ -158,6 +164,49 @@ STATIC RTN_STATUS PM304_end_trans(struct motorRecord *mr)
     
 }
 
+/* request homing move */
+STATIC void request_home(struct mess_node *motor_call, int model, int axis, int home_direction,
+                         struct PM304controller* cntrl) {
+    // hardware homes use creep speed. Max creep speed is 800, use velo if under this. Previous creep speed
+    // is restored next velocity change to cntrl->creep_speeds so previous value is used for any creep steps
+    // at end of regular motion
+    const int MAX_CREEP_SPEED = 800;
+    int velo = cntrl->velo[axis-1];
+    int creep_speed = (velo>MAX_CREEP_SPEED) ? MAX_CREEP_SPEED : velo;
+    int home_mode = cntrl->home_mode[axis-1];
+    char* datum_mode = cntrl->datum_mode[axis-1];
+    char buff[32];
+    buff[0] = '\0';
+    if (model == MODEL_PM304){
+        sprintf(buff, "%dSC%d;", axis, creep_speed);
+        strcat(motor_call->message, buff);
+        sprintf(buff, "%dIX%d;", axis, home_direction);
+    } else {
+        // datum mode: [0] = encoder index input polarity, [3] automatic direction search, [4] automatic opposite limit search
+        if ( home_mode==HOME_MODE_BUILTIN || home_mode==HOME_MODE_REVERSE_HOME_AND_ZERO || home_mode==HOME_MODE_FORWARD_HOME_AND_ZERO) {
+            datum_mode[1] = '0'; // set datum mode to capture only on HD command
+            if ( home_mode==HOME_MODE_REVERSE_HOME_AND_ZERO ) {
+                sprintf(buff, "%dSH0;", axis); // define home position as 0
+                datum_mode[2] = '1'; // set datum mode to apply home position
+                home_direction = -1;
+            } else if ( home_mode==HOME_MODE_FORWARD_HOME_AND_ZERO ) {
+                sprintf(buff, "%dSH0;", axis); // define home position as 0
+                datum_mode[2] = '1'; // set datum mode to apply home position
+                home_direction = 1;
+            }
+            strcat(motor_call->message, buff);
+            sprintf(buff, "%dDM%s;", axis, datum_mode);
+            strcat(motor_call->message, buff);
+            sprintf(buff, "%dSC%d;", axis, creep_speed);
+            strcat(motor_call->message, buff);
+            sprintf(buff, "%dHD%d;", axis, home_direction);
+            // home position may or may not be automatically applied at end of HD depending on datum mode setting
+        } else {
+            // For all other home modes let SNL take care of everything, so do not reset creep speed. See homing.st
+        }
+    }
+    strcat(motor_call->message, buff);
+}
 
 /* add a part to the transaction */
 STATIC RTN_STATUS PM304_build_trans(motor_cmnd command, double *parms, struct motorRecord *mr)
@@ -166,6 +215,7 @@ STATIC RTN_STATUS PM304_build_trans(motor_cmnd command, double *parms, struct mo
     struct mess_node *motor_call;
     struct controller *brdptr;
     struct PM304controller *cntrl;
+    const double MAX_SERVO_PID = 32767.0;
     char buff[30];
     int axis, card;
     RTN_STATUS rtnval;
@@ -213,12 +263,17 @@ STATIC RTN_STATUS PM304_build_trans(motor_cmnd command, double *parms, struct mo
             }
             if (strlen(mr->post) != 0)
                 motor_call->postmsgptr = (char *) &mr->post;
+            /* Send a reset command before any move */
+            if (cntrl->reset_before_move==1) {
+                sprintf(buff, "%dRS;", axis);
+                strcat(motor_call->message, buff);
+                buff[0] = '\0';
+			}
             break;
-
         default:
             break;
     }
-
+    
     switch (command)
     {
     case MOVE_ABS:
@@ -227,31 +282,28 @@ STATIC RTN_STATUS PM304_build_trans(motor_cmnd command, double *parms, struct mo
     case MOVE_REL:
         sprintf(buff, "%dMR%ld;", axis, ival);
         break;
-    case HOME_FOR:
-        if (cntrl->model == MODEL_PM304){
-           sprintf(buff, "%dIX;", axis);
-        } else {
-           sprintf(buff, "%dHD;", axis);
-        }
-        break;
     case HOME_REV:
-        if (cntrl->model == MODEL_PM304){
-           sprintf(buff, "%dIX-1;", axis);
-        } else {
-           sprintf(buff, "%dHD-1;", axis);
-        }
+        request_home(motor_call, cntrl->model, axis, -1, cntrl);
+        break;
+    case HOME_FOR:
+        request_home(motor_call, cntrl->model, axis, 1, cntrl);
         break;
     case LOAD_POS:
-        if (cntrl->use_encoder[axis-1]){
+        sprintf(buff, "%dCP%ld;", axis, ival);
+        if (cntrl->use_encoder[axis-1] || cntrl->model != MODEL_PM304){
+           strcat(motor_call->message, buff);
            sprintf(buff, "%dAP%ld;", axis, ival);
-        } else {
-           sprintf(buff, "%dCP%ld;", axis, ival);
         }
         break;
     case SET_VEL_BASE:
         break;          /* PM304 does not use base velocity */
     case SET_VELOCITY:
+        if (cntrl->creep_speeds[axis-1] != 0) {
+            sprintf(buff, "%dSC%d;", axis, cntrl->creep_speeds[axis-1]);
+            strcat(motor_call->message, buff);
+        }
         sprintf(buff, "%dSV%ld;", axis, ival);
+        cntrl->velo[axis-1] = ival;
         break;
     case SET_ACCEL:
         sprintf(buff, "%dSA%ld;", axis, ival);
@@ -276,6 +328,12 @@ STATIC RTN_STATUS PM304_build_trans(motor_cmnd command, double *parms, struct mo
            of all motors */
         break;
     case STOP_AXIS:
+	    /* Send a stop command as our first port of call */
+        sprintf(buff, "%dST;", axis);
+        strcat(motor_call->message, buff);
+        /* Send a second stop preceded by a reset command as a contingency in case the first stop is impeded by a tracking abort */
+        sprintf(buff, "%dRS;", axis);
+        strcat(motor_call->message, buff);
         sprintf(buff, "%dST;", axis);
         break;
     case JOG:
@@ -294,15 +352,31 @@ STATIC RTN_STATUS PM304_build_trans(motor_cmnd command, double *parms, struct mo
         }
         break;
     case SET_PGAIN:
-        sprintf(buff, "%dKP%ld;", axis, ival);
+        // for servo mode we need NINT(dval * MAX_SERVO_PID)
+        // in stepper mode this is used for end of move position correction
+        if (cntrl->model == MODEL_PM304) {
+            sprintf(buff, "%dKP%ld;", axis, ival);
+        } else if (cntrl->control_mode[axis-1] == 1) {
+            sprintf(buff, "%dKP%ld;", axis, NINT(dval * MAX_SERVO_PID)); // servo motor, proportional gain servo coefficient
+        } else {
+            sprintf(buff, "%dKP%ld;", axis, NINT(dval * 100.0)); // stepper motor, a correction gain percentage
+        }
         break;
 
     case SET_IGAIN:
-        sprintf(buff, "%dKS%ld;", axis, ival);
+        if (cntrl->model == MODEL_PM304) {
+            sprintf(buff, "%dKS%ld;", axis, ival);
+        } else if (cntrl->control_mode[axis-1] == 1) {
+            sprintf(buff, "%dKS%ld;", axis, NINT(dval * MAX_SERVO_PID)); // only valid in servo mode on PM600
+        }
         break;
 
     case SET_DGAIN:
-        sprintf(buff, "%dKV%ld;", axis, ival);
+        if (cntrl->model == MODEL_PM304) {
+            sprintf(buff, "%dKV%ld;", axis, ival);
+        } else if (cntrl->control_mode[axis-1] == 1) {
+            sprintf(buff, "%dKV%ld;", axis, NINT(dval * MAX_SERVO_PID)); // only valid in servo mode on PM600
+        }
         break;
 
     case ENABLE_TORQUE:
@@ -313,7 +387,20 @@ STATIC RTN_STATUS PM304_build_trans(motor_cmnd command, double *parms, struct mo
         sprintf(buff, "%dAB;", axis);
         break;
 
+   /* limits may or may not be enforced depending on last SL command. 
+      Hardware will not let you set a low limit >= high limit so order of setting
+      may be important, but might get round that by just sending twice i.e set_low, set_high, set_low, set_high
+      Need to look more closely at motor record, it may already cover this if it gets a correct readback of existing limits 
+      which it does not currently get. 
+            sprintf(buff, "%dUL%ld;", axis, ival); // high limit 
+            sprintf(buff, "%dLL%ld;", axis, ival); // low limit
+    */
     case SET_HIGH_LIMIT:
+        trans->state = IDLE_STATE;  /* No command sent to the controller. */
+        /* The PM304 internal soft limits are very difficult to retrieve, not
+         * implemented yet */
+        break;
+
     case SET_LOW_LIMIT:
         trans->state = IDLE_STATE;  /* No command sent to the controller. */
         /* The PM304 internal soft limits are very difficult to retrieve, not
